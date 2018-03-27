@@ -147,6 +147,12 @@ THREE.GLTFLoader = ( function () {
 
 				}
 
+				if ( json.extensionsUsed.indexOf( EXTENSIONS.EXT_PROPERTY_ANIMATION ) >= 0 ) {
+
+					extensions[ EXTENSIONS.EXT_PROPERTY_ANIMATION ] = new GLTFPropertyAnimationExtension();
+
+				}
+
 			}
 
 			console.time( 'GLTFLoader' );
@@ -224,8 +230,226 @@ THREE.GLTFLoader = ( function () {
 		KHR_DRACO_MESH_COMPRESSION: 'KHR_draco_mesh_compression',
 		KHR_LIGHTS: 'KHR_lights',
 		KHR_MATERIALS_PBR_SPECULAR_GLOSSINESS: 'KHR_materials_pbrSpecularGlossiness',
-		KHR_MATERIALS_UNLIT: 'KHR_materials_unlit'
+		KHR_MATERIALS_UNLIT: 'KHR_materials_unlit',
+		EXT_PROPERTY_ANIMATION: 'EXT_property_animation'
 	};
+
+	/**
+	 * Property Animation Extension
+	 *
+	 * Specification: PENDING
+	 */
+	function GLTFPropertyAnimationExtension() {
+
+		this.name = EXTENSIONS.EXT_PROPERTY_ANIMATION;
+		this.PATH_PROPERTIES = {
+			extensions: {
+				KHR_lights: {
+					light: {
+						color: {
+							_typedKeyframeTrack: THREE.ColorKeyframeTrack,
+							_targetName: 'color'
+						},
+						intensity: {
+							_typedKeyframeTrack: THREE.NumberKeyframeTrack,
+							_targetName: 'intensity'
+						},
+						innerConeAngle: {
+							_typedKeyframeTrack: THREE.NumberKeyframeTrack,
+							_targetName: 'innerConeAngle'
+						},
+						outerConeAngle: {
+							_typedKeyframeTrack: THREE.NumberKeyframeTrack,
+							_targetName: 'outerConeAngle'
+						}
+					}
+				}
+			},
+			mesh: {
+				primitives: {
+					_isIndexed: true,
+					material: {
+						_targetName: 'material',
+						pbrMetallicRoughness: {
+							baseColorFactor: {
+								_typedKeyframeTrack: THREE.ColorKeyframeTrack,
+								_targetName: 'color'
+							},
+							metallicFactor: {
+								_typedKeyframeTrack: THREE.NumberKeyframeTrack,
+								_targetName: 'metalness'
+							},
+							roughnessFactor: {
+								_typedKeyframeTrack: THREE.NumberKeyframeTrack,
+								_targetName: 'roughness'
+							}
+						},
+						emissiveFactor: {
+							_typedKeyframeTrack: THREE.ColorKeyframeTrack,
+							_targetName: 'emissive'
+						}
+					}
+				}
+			}
+		};
+
+	}
+
+	GLTFPropertyAnimationExtension.prototype.loadAnimation = function ( animationDef, dependencies, tracks ) {
+
+		var channels = animationDef.extensions[ this.name ].channels;
+
+		for ( var i = 0, il = channels.length; i < il; i ++ ) {
+
+			var channel = channels[ i ];
+			var sampler = animationDef.samplers[ channel.sampler ];
+
+			if ( sampler ) {
+
+				var target = channel.target;
+				var nodeId = target.node;
+				var input = sampler.input;
+				var output = sampler.output;
+
+				var inputAccessor = dependencies.accessors[ input ];
+				var outputAccessor = dependencies.accessors[ output ];
+
+				var node = dependencies.nodes[ nodeId ];
+
+				if ( node ) {
+
+					var TypedKeyframeTrack;
+					var targetNames = [];
+					var object = node;
+					var pathPartNode = this.PATH_PROPERTIES;
+					var pathParts = target.path.split( '/' );
+					targetNames.push( object.name ? object.name : object.uuid );
+
+					for ( var pathIndex = 0, pathPartsLength = pathParts.length; pathIndex < pathPartsLength; pathIndex ++ ) {
+
+						var pathPart = pathParts[ pathIndex ];
+						pathPartNode = pathPartNode[ pathPart ];
+
+						if ( pathPartNode === undefined ) {
+
+							throw new Error( 'THREE.GLTFLoader: ' + EXTENSIONS.EXT_PROPERTY_ANIMATION + ': ' + target.path + ' path is not supported.' );
+
+						}
+
+						if ( pathPartNode._isIndexed ) {
+
+							pathPart = pathParts[ ++ pathIndex ];
+							if ( object.isGroup ) {
+
+								object = object.children[ pathPart ];
+
+							}
+							targetNames = [];
+							targetNames.push( object.name ? object.name : object.uuid );
+
+						}
+
+						if ( pathPartNode._targetName !== undefined ) {
+
+							targetNames.push( pathPartNode._targetName );
+							object = object[ pathPartNode._targetName ];
+
+						}
+
+						if ( pathPartNode._typedKeyframeTrack !== undefined ) {
+
+							TypedKeyframeTrack = pathPartNode._typedKeyframeTrack;
+
+						}
+
+					}
+
+					var addTrack = function ( targetName, input, output ) {
+
+						var interpolation = sampler.interpolation !== undefined ? INTERPOLATION[ sampler.interpolation ] : THREE.InterpolateLinear;
+
+						// KeyframeTrack.optimize() will modify given 'times' and 'values'
+						// buffers before creating a truncated copy to keep. Because buffers may
+						// be reused by other tracks, make copies here.
+
+						var track = new TypedKeyframeTrack(
+							targetName,
+							input,
+							output,
+							interpolation
+						);
+
+						// Here is the trick to enable custom interpolation.
+						// Overrides .createInterpolant in a factory method which creates custom interpolation.
+						if ( sampler.interpolation === 'CUBICSPLINE' ) {
+
+							track.createInterpolant = function InterpolantFactoryMethodGLTFCubicSpline( result ) {
+
+								// A CUBICSPLINE keyframe in glTF has three output values for each input value,
+								// representing inTangent, splineVertex, and outTangent. As a result, track.getValueSize()
+								// must be divided by three to get the interpolant's sampleSize argument.
+
+								return new GLTFCubicSplineInterpolant( this.times, this.values, this.getValueSize() / 3, result );
+
+							};
+
+							// Workaround, provide an alternate way to know if the interpolant type is cubis spline to track.
+							// track.getInterpolation() doesn't return valid value for custom interpolant.
+							track.createInterpolant.isInterpolantFactoryMethodGLTFCubicSpline = true;
+
+						}
+
+						tracks.push( track );
+
+					};
+
+					if ( targetNames[ targetNames.length - 1 ] !== 'color' ) {
+
+						addTrack(
+							targetNames.join( '.' ),
+							THREE.AnimationUtils.arraySlice( inputAccessor.array, 0 ),
+							THREE.AnimationUtils.arraySlice( outputAccessor.array, 0 )
+						);
+
+					} else {
+
+						// We must split the color animation into color and opacity.
+						addTrack(
+							targetNames.join( '.' ),
+							THREE.AnimationUtils.arraySlice( inputAccessor.array, 0 ),
+							THREE.AnimationUtils.arraySlice( outputAccessor.array, 0 )
+						);
+
+						targetNames[ targetNames.length - 1 ] = 'opacity';
+						var values = outputAccessor.array;
+						var opacityValues = [];
+
+						for ( var valueIndex = 0, valuesLength = values.length; valueIndex < valuesLength; valueIndex ++ ) {
+
+							if ( ( valueIndex % 4 ) === 3 ) {
+
+								opacityValues.push( values[ valueIndex ] );
+
+							}
+
+						}
+
+						addTrack(
+							targetNames.join( '.' ),
+							THREE.AnimationUtils.arraySlice( inputAccessor.array, 0 ),
+							opacityValues
+						);
+
+					}
+
+				}
+
+			}
+
+		}
+
+	};
+
 
 	/**
 	 * Lights Extension
@@ -433,7 +657,7 @@ THREE.GLTFLoader = ( function () {
 	 *
 	 * Specification: https://github.com/KhronosGroup/glTF/pull/874
 	 */
-	function GLTFDracoMeshCompressionExtension ( dracoLoader ) {
+	function GLTFDracoMeshCompressionExtension( dracoLoader ) {
 
 		if ( ! dracoLoader ) {
 
@@ -455,7 +679,7 @@ THREE.GLTFLoader = ( function () {
 
 		for ( var attributeName in gltfAttributeMap ) {
 
-			if ( !( attributeName in ATTRIBUTES ) ) continue;
+			if ( ! ( attributeName in ATTRIBUTES ) ) continue;
 
 			threeAttributeMap[ ATTRIBUTES[ attributeName ] ] = gltfAttributeMap[ attributeName ];
 
@@ -1071,7 +1295,7 @@ THREE.GLTFLoader = ( function () {
 		WEIGHT: 'skinWeight', // deprecated
 		JOINTS_0: 'skinIndex',
 		JOINT: 'skinIndex' // deprecated
-	}
+	};
 
 	var PATH_PROPERTIES = {
 		scale: 'scale',
@@ -1935,7 +2159,7 @@ THREE.GLTFLoader = ( function () {
 
 		}
 
-		if ( materialDef.normalTexture !== undefined && materialType !== THREE.MeshBasicMaterial) {
+		if ( materialDef.normalTexture !== undefined && materialType !== THREE.MeshBasicMaterial ) {
 
 			pending.push( parser.assignTexture( materialParams, 'normalMap', materialDef.normalTexture.index ) );
 
@@ -1949,7 +2173,7 @@ THREE.GLTFLoader = ( function () {
 
 		}
 
-		if ( materialDef.occlusionTexture !== undefined && materialType !== THREE.MeshBasicMaterial) {
+		if ( materialDef.occlusionTexture !== undefined && materialType !== THREE.MeshBasicMaterial ) {
 
 			pending.push( parser.assignTexture( materialParams, 'aoMap', materialDef.occlusionTexture.index ) );
 
@@ -1961,13 +2185,13 @@ THREE.GLTFLoader = ( function () {
 
 		}
 
-		if ( materialDef.emissiveFactor !== undefined && materialType !== THREE.MeshBasicMaterial) {
+		if ( materialDef.emissiveFactor !== undefined && materialType !== THREE.MeshBasicMaterial ) {
 
 			materialParams.emissive = new THREE.Color().fromArray( materialDef.emissiveFactor );
 
 		}
 
-		if ( materialDef.emissiveTexture !== undefined && materialType !== THREE.MeshBasicMaterial) {
+		if ( materialDef.emissiveTexture !== undefined && materialType !== THREE.MeshBasicMaterial ) {
 
 			pending.push( parser.assignTexture( materialParams, 'emissiveMap', materialDef.emissiveTexture.index ) );
 
@@ -2014,7 +2238,7 @@ THREE.GLTFLoader = ( function () {
 	 * @param  {GLTF.Primitive} primitiveDef
 	 * @param  {Array<THREE.BufferAttribute>} accessors
 	 */
-	function addPrimitiveAttributes ( geometry, primitiveDef, accessors ) {
+	function addPrimitiveAttributes( geometry, primitiveDef, accessors ) {
 
 		var attributes = primitiveDef.attributes;
 
@@ -2024,14 +2248,14 @@ THREE.GLTFLoader = ( function () {
 			var bufferAttribute = accessors[ attributes[ gltfAttributeName ] ];
 
 			// Skip attributes already provided by e.g. Draco extension.
-			if ( !threeAttributeName ) continue;
+			if ( ! threeAttributeName ) continue;
 			if ( threeAttributeName in geometry.attributes ) continue;
 
 			geometry.addAttribute( threeAttributeName, bufferAttribute );
 
 		}
 
-		if ( primitiveDef.indices !== undefined && !geometry.index ) {
+		if ( primitiveDef.indices !== undefined && ! geometry.index ) {
 
 			geometry.setIndex( accessors[ primitiveDef.indices ] );
 
@@ -2088,11 +2312,11 @@ THREE.GLTFLoader = ( function () {
 
 						} );
 
-					cache.push( { primitive: primitive, promise: geometryPromise  } );
+					cache.push( { primitive: primitive, promise: geometryPromise } );
 
 					pending.push( geometryPromise );
 
-				} else  {
+				} else {
 
 					// Otherwise create a new geometry
 					geometry = new THREE.BufferGeometry();
@@ -2242,7 +2466,7 @@ THREE.GLTFLoader = ( function () {
 							lineMaterial = new THREE.LineBasicMaterial();
 							THREE.Material.prototype.copy.call( lineMaterial, material );
 							lineMaterial.color.copy( material.color );
-							lineMaterial.lights = false;  // LineBasicMaterial doesn't support lights yet
+							lineMaterial.lights = false; // LineBasicMaterial doesn't support lights yet
 
 							scope.cache.add( cacheKey, lineMaterial );
 
@@ -2276,7 +2500,7 @@ THREE.GLTFLoader = ( function () {
 							THREE.Material.prototype.copy.call( pointsMaterial, material );
 							pointsMaterial.color.copy( material.color );
 							pointsMaterial.map = material.map;
-							pointsMaterial.lights = false;  // PointsMaterial doesn't support lights yet
+							pointsMaterial.lights = false; // PointsMaterial doesn't support lights yet
 
 							scope.cache.add( cacheKey, pointsMaterial );
 
@@ -2402,6 +2626,7 @@ THREE.GLTFLoader = ( function () {
 	GLTFParser.prototype.loadAnimation = function ( animationIndex ) {
 
 		var json = this.json;
+		var extensions = this.extensions;
 
 		var animationDef = this.json.animations[ animationIndex ];
 
@@ -2413,6 +2638,13 @@ THREE.GLTFLoader = ( function () {
 		] ).then( function ( dependencies ) {
 
 			var tracks = [];
+
+			if ( animationDef.extensions && animationDef.extensions[ EXTENSIONS.EXT_PROPERTY_ANIMATION ] ) {
+
+				var paExtension = extensions[ EXTENSIONS.EXT_PROPERTY_ANIMATION ];
+				paExtension.loadAnimation( animationDef, dependencies, tracks );
+
+			}
 
 			for ( var i = 0, il = animationDef.channels.length; i < il; i ++ ) {
 

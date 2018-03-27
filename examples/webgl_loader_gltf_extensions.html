@@ -63,6 +63,16 @@
 			var clock = new THREE.Clock();
 
 			var scenes = {
+				AnimatedMaterial: {
+					name: 'BoomBox (PBR)',
+					url: './models/gltf/AnimatedMaterial/%s/animated_material.gltf',
+					author: 'Microsoft',
+					authorURL: 'https://www.microsoft.com/',
+					cameraPos: new THREE.Vector3( 3, 1, 4 ),
+					addLights: true,
+					extensions: [ 'glTF' ],
+					addEnvMap: true
+				},
 				Boombox: {
 					name: 'BoomBox (PBR)',
 					url: './models/gltf/BoomBox/%s/BoomBox.gltf',
