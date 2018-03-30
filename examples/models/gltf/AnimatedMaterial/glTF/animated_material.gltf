@@ -151,17 +151,19 @@
                     "channels" : [
                         {
                             "sampler" : 0, 
-                            "target" : {
-                                "node" : 3, 
-                                "path" : "mesh/primitives/0/material/pbrMetallicRoughness/roughnessFactor"
-                            }
+                            "target" : "/materials/1/pbrMetallicRoughness/roughnessFactor"
                         }, 
                         {
                             "sampler" : 1, 
-                            "target" : {
-                                "node" : 3, 
-                                "path" : "mesh/primitives/0/material/pbrMetallicRoughness/baseColorFactor"
-                            }
+                            "target" : "/materials/1/pbrMetallicRoughness/baseColorFactor"
+                        },
+                        {
+                            "sampler" : 1, 
+                            "target" : "/extensions/KHR_lights/lights/1/color"
+                        },
+                        {
+                            "sampler" : 1, 
+                            "target" : "/extensions/KHR_lights/lights/0/color"
                         }
                     ]
                 }
@@ -249,8 +251,31 @@
         }
     ], 
     "extensionsUsed" : [
-        "EXT_property_animation"
+        "EXT_property_animation",
+        "KHR_lights"
     ], 
+    "extensions": {
+        "KHR_lights" : {
+            "lights": [
+                {
+                    "color": [
+                        1.0,
+                        1.0,
+                        1.0
+                    ],
+                    "type": "directional"
+                },
+                {
+                    "color": [
+                        1.0,
+                        1.0,
+                        1.0
+                    ],
+                    "type": "ambient"
+                }
+            ]
+        }
+    },
     "materials" : [
         {
             "doubleSided" : true, 
@@ -331,7 +356,12 @@
                 4.076245307922363, 
                 5.903861999511719, 
                 -1.0054539442062378
-            ]
+            ],
+            "extensions" : {
+                "KHR_lights" : {
+                    "light" : 0
+                }
+            }
         }, 
         {
             "mesh" : 0, 
@@ -367,7 +397,12 @@
                 3, 
                 1, 
                 0
-            ]
+            ],
+            "extensions" : {
+                "KHR_lights" : {
+                    "light" : 1
+                }
+            }
         }
     ]
 }

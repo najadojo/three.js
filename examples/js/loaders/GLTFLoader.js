@@ -245,7 +245,18 @@ THREE.GLTFLoader = ( function () {
 		this.PATH_PROPERTIES = {
 			extensions: {
 				KHR_lights: {
-					light: {
+					lights: {
+						_isIndexed: true,
+						_getTarget: function ( dependencies, extensions, index ) {
+
+							var lights = extensions[ EXTENSIONS.KHR_LIGHTS ].lights;
+							var light = lights[ index ];
+							return {
+								object: light,
+								targetName: ( light.name ? light.name : light.uuid )
+							};
+
+						},
 						color: {
 							_typedKeyframeTrack: THREE.ColorKeyframeTrack,
 							_targetName: 'color'
@@ -265,37 +276,87 @@ THREE.GLTFLoader = ( function () {
 					}
 				}
 			},
-			mesh: {
-				primitives: {
-					_isIndexed: true,
-					material: {
-						_targetName: 'material',
-						pbrMetallicRoughness: {
-							baseColorFactor: {
-								_typedKeyframeTrack: THREE.ColorKeyframeTrack,
-								_targetName: 'color'
-							},
-							metallicFactor: {
-								_typedKeyframeTrack: THREE.NumberKeyframeTrack,
-								_targetName: 'metalness'
-							},
-							roughnessFactor: {
-								_typedKeyframeTrack: THREE.NumberKeyframeTrack,
-								_targetName: 'roughness'
+			materials: {
+				_isIndexed: true,
+				_getTarget: function ( dependencies, extensions, index ) {
+
+					var material = dependencies.materials[ index ];
+					function matchNode( node ) {
+
+						if ( node.isMesh ) {
+
+							if ( node.material === material ) {
+
+								return ( node.name ? node.name : node.uuid ) + ".material";
+
 							}
-						},
-						emissiveFactor: {
-							_typedKeyframeTrack: THREE.ColorKeyframeTrack,
-							_targetName: 'emissive'
+
 						}
+
+						return undefined;
+
 					}
+
+					var nodes = dependencies.nodes;
+					var result = {
+						object: material
+					};
+					for ( var i = 0, il = nodes.length; i < il; i ++ ) {
+
+						var node = nodes[ i ];
+						if ( node.isGroup ) {
+
+							for ( var j = 0, jl = node.children.length; j < jl; j ++ ) {
+
+								result.targetName = matchNode( node.children[ j ] );
+								if ( result.targetName !== undefined ) {
+
+									return result;
+
+								}
+
+							}
+
+						} else {
+
+							result.targetName = matchNode( node );
+							if ( result.targetName !== undefined ) {
+
+								return result;
+
+							}
+
+						}
+
+					}
+
+					return undefined;
+
+				},
+				pbrMetallicRoughness: {
+					baseColorFactor: {
+						_typedKeyframeTrack: THREE.ColorKeyframeTrack,
+						_targetName: 'color'
+					},
+					metallicFactor: {
+						_typedKeyframeTrack: THREE.NumberKeyframeTrack,
+						_targetName: 'metalness'
+					},
+					roughnessFactor: {
+						_typedKeyframeTrack: THREE.NumberKeyframeTrack,
+						_targetName: 'roughness'
+					}
+				},
+				emissiveFactor: {
+					_typedKeyframeTrack: THREE.ColorKeyframeTrack,
+					_targetName: 'emissive'
 				}
 			}
 		};
 
 	}
 
-	GLTFPropertyAnimationExtension.prototype.loadAnimation = function ( animationDef, dependencies, tracks ) {
+	GLTFPropertyAnimationExtension.prototype.loadAnimation = function ( animationDef, dependencies, extensions, tracks ) {
 
 		var channels = animationDef.extensions[ this.name ].channels;
 
@@ -307,27 +368,29 @@ THREE.GLTFLoader = ( function () {
 			if ( sampler ) {
 
 				var target = channel.target;
-				var nodeId = target.node;
 				var input = sampler.input;
 				var output = sampler.output;
 
 				var inputAccessor = dependencies.accessors[ input ];
 				var outputAccessor = dependencies.accessors[ output ];
 
-				var node = dependencies.nodes[ nodeId ];
-
-				if ( node ) {
+				if ( target ) {
 
 					var TypedKeyframeTrack;
 					var targetNames = [];
-					var object = node;
+					var object;
 					var pathPartNode = this.PATH_PROPERTIES;
-					var pathParts = target.path.split( '/' );
-					targetNames.push( object.name ? object.name : object.uuid );
+					var pathParts = target.split( '/' );
 
 					for ( var pathIndex = 0, pathPartsLength = pathParts.length; pathIndex < pathPartsLength; pathIndex ++ ) {
 
 						var pathPart = pathParts[ pathIndex ];
+						if ( pathPart === '' ) {
+
+							continue;
+
+						}
+
 						pathPartNode = pathPartNode[ pathPart ];
 
 						if ( pathPartNode === undefined ) {
@@ -339,13 +402,25 @@ THREE.GLTFLoader = ( function () {
 						if ( pathPartNode._isIndexed ) {
 
 							pathPart = pathParts[ ++ pathIndex ];
-							if ( object.isGroup ) {
+
+							targetNames = [];
+							if ( pathPartNode._getTarget !== undefined ) {
+
+								var foundTarget = pathPartNode._getTarget( dependencies, extensions, pathPart );
+								if ( foundTarget.targetName == undefined || foundTarget.object == undefined ) {
+
+									throw new Error( 'THREE.GLTFLoader: ' + EXTENSIONS.EXT_PROPERTY_ANIMATION + ': ' + target.path + ' path is found.' );
+
+								}
+								targetNames.push( foundTarget.targetName );
+								object = foundTarget.object;
+
+							} else if ( object.isGroup ) {
 
 								object = object.children[ pathPart ];
+								targetNames.push( object.name ? object.name : object.uuid );
 
 							}
-							targetNames = [];
-							targetNames.push( object.name ? object.name : object.uuid );
 
 						}
 
@@ -364,7 +439,7 @@ THREE.GLTFLoader = ( function () {
 
 					}
 
-					var addTrack = function ( targetName, input, output ) {
+					var addTrack = function ( TypedKeyframeTrackParam, targetName, input, output ) {
 
 						var interpolation = sampler.interpolation !== undefined ? INTERPOLATION[ sampler.interpolation ] : THREE.InterpolateLinear;
 
@@ -372,7 +447,7 @@ THREE.GLTFLoader = ( function () {
 						// buffers before creating a truncated copy to keep. Because buffers may
 						// be reused by other tracks, make copies here.
 
-						var track = new TypedKeyframeTrack(
+						var track = new TypedKeyframeTrackParam(
 							targetName,
 							input,
 							output,
@@ -406,6 +481,7 @@ THREE.GLTFLoader = ( function () {
 					if ( targetNames[ targetNames.length - 1 ] !== 'color' ) {
 
 						addTrack(
+							TypedKeyframeTrack,
 							targetNames.join( '.' ),
 							THREE.AnimationUtils.arraySlice( inputAccessor.array, 0 ),
 							THREE.AnimationUtils.arraySlice( outputAccessor.array, 0 )
@@ -415,6 +491,7 @@ THREE.GLTFLoader = ( function () {
 
 						// We must split the color animation into color and opacity.
 						addTrack(
+							THREE.ColorKeyframeTrack,
 							targetNames.join( '.' ),
 							THREE.AnimationUtils.arraySlice( inputAccessor.array, 0 ),
 							THREE.AnimationUtils.arraySlice( outputAccessor.array, 0 )
@@ -435,6 +512,7 @@ THREE.GLTFLoader = ( function () {
 						}
 
 						addTrack(
+							THREE.NumberKeyframeTrack,
 							targetNames.join( '.' ),
 							THREE.AnimationUtils.arraySlice( inputAccessor.array, 0 ),
 							opacityValues
@@ -2633,7 +2711,9 @@ THREE.GLTFLoader = ( function () {
 		return this.getMultiDependencies( [
 
 			'accessor',
-			'node'
+			'node',
+			'material',
+			'scene'
 
 		] ).then( function ( dependencies ) {
 
@@ -2642,7 +2722,7 @@ THREE.GLTFLoader = ( function () {
 			if ( animationDef.extensions && animationDef.extensions[ EXTENSIONS.EXT_PROPERTY_ANIMATION ] ) {
 
 				var paExtension = extensions[ EXTENSIONS.EXT_PROPERTY_ANIMATION ];
-				paExtension.loadAnimation( animationDef, dependencies, tracks );
+				paExtension.loadAnimation( animationDef, dependencies, extensions, tracks );
 
 			}
 
